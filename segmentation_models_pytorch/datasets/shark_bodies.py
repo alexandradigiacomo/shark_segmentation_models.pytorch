@@ -2,110 +2,66 @@ import os
 import torch
 import numpy as np
 from PIL import Image
+from pycocotools import mask as coco_mask
+from pycocotools.coco import COCO 
 
+class SharkBodies(torch.utils.data.Dataset):
 
-class OxfordPetDataset(torch.utils.data.Dataset):
-    def __init__(self, root, mode="train", transform=None):
-        """
-        Args:
-            root (str): Path to the root directory containing the dataset.
-            mode (str): Mode to load data (train, valid, or test). Default is "train".
-            transform (callable, optional): A function/transform to apply to the sample.
-        """
+    def __init__(self, root, mode="train"):
         assert mode in {"train", "valid", "test"}
 
         self.root = root
         self.mode = mode
-        self.transform = transform
 
-        # Paths to images and masks
-        self.images_directory = os.path.join(self.root, "images")
-        self.masks_directory = os.path.join(self.root, "annotations", "trimaps")
+        # path to images/masks stored at root
+        self.images_directory = os.path.join(self.root, "images") # (?)
+        self.masks_directory = os.path.join(self.root, "annotations", "trimaps") # (?)
 
-        # Read filenames according to the chosen split (train/valid/test)
+        # filenames according to the chosen split
         self.filenames = self._read_split()
 
-    def __len__(self):
-        """
-        Returns the number of samples in the dataset.
-        """
+    def __len__(self): 
         return len(self.filenames)
 
     def __getitem__(self, idx):
-        """
-        Retrieves a sample (image, mask, trimap) at the specified index.
-
-        Args:
-            idx (int): Index of the sample to retrieve.
-        
-        Returns:
-            dict: A dictionary containing the image, mask, and trimap.
-        """
+        # define filenames, image paths, and annotation mask paths
         filename = self.filenames[idx]
         image_path = os.path.join(self.images_directory, filename + ".jpg")
-        mask_path = os.path.join(self.masks_directory, filename + ".png")
+        mask_path = os.path.join(self.masks_directory, filename + ".png") #(?)
 
-        # Load the image and mask
+        # load the image and mask
         image = np.array(Image.open(image_path).convert("RGB"))
         trimap = np.array(Image.open(mask_path))
         mask = self._preprocess_mask(trimap)
 
-        # Store the image, mask, and trimap in a dictionary
+        # store the image, mask, and trimap in a dictionary
         sample = dict(image=image, mask=mask, trimap=trimap)
-
-        # Apply transformations if provided
-        if self.transform is not None:
-            sample = self.transform(**sample)
 
         return sample
 
-    @staticmethod
-    def _preprocess_mask(mask):
-        """
-        Preprocesses the mask to convert it to the required format.
-        Since the values are already 0 (background) and 1 (foreground), 
-        no remapping is necessary.
+    def _read_split(self): # checked 01/08 good
+        if self.mode == "train":
+            split_filename = "train.json"
+        elif self.mode == "valid":
+            split_filename = "val.json"
+        else:
+            split_filename = "test.json"
 
-        Args:
-            mask (numpy.ndarray): The mask image.
-
-        Returns:
-            numpy.ndarray: The preprocessed mask.
-        """
-        return mask.astype(np.float32)
-
-    def _read_split(self):
-        """
-        Reads the split file (train, validation, or test) and returns the filenames.
-
-        Returns:
-            list: A list of filenames corresponding to the selected split.
-        """
-        split_filename = "test.txt" if self.mode == "test" else "trainval.txt"
         split_filepath = os.path.join(self.root, "annotations", split_filename)
 
-        with open(split_filepath) as f:
-            split_data = f.read().strip("\n").split("\n")
+        with open(split_filepath, 'r') as f:
+            split_data = json.load(f)
 
-        filenames = [x.split(" ")[0] for x in split_data]
-
-        # Split filenames into training and validation sets
-        if self.mode == "train":  # 90% for training
-            filenames = [x for i, x in enumerate(filenames) if i % 10 != 0]
-        elif self.mode == "valid":  # 10% for validation
-            filenames = [x for i, x in enumerate(filenames) if i % 10 == 0]
+        filenames = [item["image_id"] for item in split_data]
 
         return filenames
 
 
-class SimpleOxfordPetDataset(OxfordPetDataset):
+class SimpleSharkBodies(SharkBodies):
     def __getitem__(self, *args, **kwargs):
-        """
-        Retrieves a sample and applies additional transformations like resizing.
-        """
         sample = super().__getitem__(*args, **kwargs)
 
-        # Resize images, masks, and trimaps to 256x256
+        # resize images, masks, and trimaps to 256x256
         image = np.array(
             Image.fromarray(sample["image"]).resize((256, 256), Image.BILINEAR)
         )
@@ -116,7 +72,7 @@ class SimpleOxfordPetDataset(OxfordPetDataset):
             Image.fromarray(sample["trimap"]).resize((256, 256), Image.NEAREST)
         )
 
-        # Convert image from HWC (height, width, channels) to CHW (channels, height, width)
+        # convert from HWC to CWH
         sample["image"] = np.moveaxis(image, -1, 0)
         sample["mask"] = np.expand_dims(mask, 0)  # Add channel dimension for mask
         sample["trimap"] = np.expand_dims(trimap, 0)  # Add channel dimension for trimap
